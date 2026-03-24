@@ -546,6 +546,7 @@ async def main(args: argparse.Namespace) -> None:
         "hirai-bot": ":books:",
         "tanichu-bot": ":robot_face:",
         "maruyama-bot": ":microscope:",
+        "daikoku-bot": ":brain:",
     }
     default_icon_urls = {
         "tanichu-bot": "https://ca.slack-edge.com/T0AEQGDELSG-U0AE5EV4NDV-4cf9e81069a1-512",
@@ -618,8 +619,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--bots",
-        default="hirai-bot,tanichu-bot",
-        help="Comma-separated bot names (default: hirai-bot,tanichu-bot)",
+        default="hirai-bot,tanichu-bot,daikoku-bot",
+        help="Comma-separated bot names (default: hirai-bot,tanichu-bot,daikoku-bot)",
     )
     parser.add_argument(
         "--data-dir",
