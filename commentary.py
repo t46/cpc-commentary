@@ -456,8 +456,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data-dir",
-        default="./bots",
-        help="Path to bot data directory (default: ./bots)",
+        default="./data",
+        help="Path to bot data directory (default: ./data)",
     )
     parser.add_argument(
         "--channel",
