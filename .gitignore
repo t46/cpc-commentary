@@ -16,3 +16,4 @@ wheels/
 
 # Bot data (managed separately)
 data/
+!data/*/CLAUDE.md
