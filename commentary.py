@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -159,6 +160,86 @@ def format_slack_message(claude_response: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Mention helpers (from cpc-slack-bot/bot.py)
+# ---------------------------------------------------------------------------
+
+CHANNEL_HISTORY_LIMIT = 20
+
+
+def strip_mention(text: str) -> str:
+    """Remove <@BOTID> mention from message text."""
+    return re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
+
+
+async def fetch_conversation_context(client, channel: str, thread_ts: str, event_ts: str) -> str:
+    """Fetch conversation context from thread or channel."""
+    is_in_thread = thread_ts != event_ts
+
+    if is_in_thread:
+        result = await client.conversations_replies(
+            channel=channel, ts=thread_ts, limit=CHANNEL_HISTORY_LIMIT
+        )
+        messages = result.get("messages", [])
+    else:
+        result = await client.conversations_history(
+            channel=channel, limit=CHANNEL_HISTORY_LIMIT
+        )
+        messages = list(reversed(result.get("messages", [])))
+
+    lines = []
+    for msg in messages:
+        user = msg.get("user", "bot")
+        text = strip_mention(msg.get("text", ""))
+        if text:
+            lines.append(f"<@{user}>: {text}")
+
+    return "\n".join(lines)
+
+
+def build_mention_prompt(
+    question: str,
+    conversation_context: str,
+    session_context: str,
+) -> str:
+    """Build prompt for responding to an @mention."""
+    parts: list[str] = []
+
+    parts.append(
+        "あなたは研究合宿に参加している研究者です。\n"
+        "Slackでメンションされたので、質問・依頼に応えてください。\n"
+    )
+
+    if session_context:
+        parts.append("## 現在の発表の状況")
+        parts.append(session_context)
+        parts.append("")
+
+    parts.append("## Slackでの会話")
+    parts.append(conversation_context)
+    parts.append("")
+
+    parts.append(
+        "## 回答のスタイル\n"
+        "- Slackでの雑談です。論文調ではなく、くだけた口調で。\n"
+        "- 簡潔に答える。長すぎない。\n"
+        "- 自分の専門知識・ディレクトリ内の知識を踏まえて回答する。\n"
+        "- 「です・ます」調は使わない。\n"
+        "- メタ的な説明は書かない。回答本文だけを出力すること。\n"
+    )
+
+    return "\n".join(parts)
+
+
+def select_bot_by_name(text: str, bots: list) -> object | None:
+    """If the text contains a bot name, return that bot."""
+    text_lower = text.lower()
+    for bot in bots:
+        if bot.name.lower() in text_lower:
+            return bot
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Slack event handlers (pattern from cpc-mwm-cwm/slack_app.py)
 # ---------------------------------------------------------------------------
 
@@ -166,8 +247,83 @@ def register_handlers(
     app: AsyncApp,
     session_mgr: SessionManager,
     channel_id: str,
+    bots: list | None = None,
 ) -> None:
     """Register Slack event handlers."""
+
+    bots = bots or []
+
+    @app.event("app_mention")
+    async def handle_mention(event: dict, client) -> None:
+        channel = event["channel"]
+        event_ts = event["ts"]
+        thread_ts = event.get("thread_ts") or event_ts
+        question = strip_mention(event.get("text", ""))
+
+        if not question:
+            return
+
+        # Add thinking_face reaction
+        try:
+            await client.reactions_add(
+                channel=channel, name="thinking_face", timestamp=event_ts
+            )
+        except Exception:
+            pass
+
+        # Select bot: by name in message, or random
+        bot = select_bot_by_name(question, bots) if bots else None
+        if not bot and bots:
+            bot = random.choice(bots)
+
+        # Fetch Slack conversation context
+        conversation_context = await fetch_conversation_context(
+            client, channel, thread_ts, event_ts
+        )
+
+        # Include session context (slides, transcript) if available
+        session_context = ""
+        if session_mgr.current_session:
+            session_context = session_mgr.build_observation()
+
+        # Build prompt
+        prompt = build_mention_prompt(
+            question=question,
+            conversation_context=conversation_context,
+            session_context=session_context,
+        )
+
+        logger.info(
+            "Mention from channel=%s, bot=%s, question=%s",
+            channel, bot.name if bot else "none", question[:80],
+        )
+
+        # Run Claude
+        resource_dir = bot.resource_dir if bot else "."
+        answer = await run_claude(prompt, resource_dir)
+
+        if not answer:
+            answer = "すみません、回答の生成中にエラーが発生しました。"
+
+        # Post reply in thread
+        post_kwargs = dict(
+            channel=channel,
+            text=answer,
+            thread_ts=thread_ts,
+        )
+        if bot:
+            post_kwargs["username"] = bot.name
+            post_kwargs["icon_emoji"] = bot.icon_emoji
+
+        await client.chat_postMessage(**post_kwargs)
+
+        # Remove thinking_face reaction
+        try:
+            await client.reactions_remove(
+                channel=channel, name="thinking_face", timestamp=event_ts
+            )
+        except Exception:
+            pass
 
     @app.event("message")
     async def handle_message(event: dict, client) -> None:
@@ -413,7 +569,7 @@ async def main(args: argparse.Namespace) -> None:
     session_mgr = SessionManager()
     app = AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
 
-    register_handlers(app, session_mgr, channel_id)
+    register_handlers(app, session_mgr, channel_id, bots=bots)
 
     # Start audio capture
     if enable_audio:

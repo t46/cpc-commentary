@@ -18,10 +18,12 @@ oauth_config:
       - chat:write.customize
       - files:read
       - groups:history
+      - reactions:write
 
 settings:
   event_subscriptions:
     bot_events:
+      - app_mention
       - message.channels
       - message.groups
   interactivity:
