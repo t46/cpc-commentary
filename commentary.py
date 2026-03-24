@@ -47,6 +47,7 @@ class BotConfig:
     name: str
     resource_dir: str
     icon_emoji: str = ":robot_face:"
+    icon_url: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -346,11 +347,16 @@ async def commentary_loop(
             continue
 
         try:
+            icon_kwargs = (
+                {"icon_url": bot.icon_url}
+                if bot.icon_url
+                else {"icon_emoji": bot.icon_emoji}
+            )
             await app.client.chat_postMessage(
                 channel=channel_id,
                 text=message,
                 username=bot.name,
-                icon_emoji=bot.icon_emoji,
+                **icon_kwargs,
             )
             session_mgr.record_comment()
             logger.info("[%s] Posted commentary: %s", bot.name, message[:80])
@@ -385,6 +391,10 @@ async def main(args: argparse.Namespace) -> None:
         "tanichu-bot": ":robot_face:",
         "maruyama-bot": ":microscope:",
     }
+    default_icon_urls = {
+        "tanichu-bot": "https://ca.slack-edge.com/T0AEQGDELSG-U0AE5EV4NDV-4cf9e81069a1-512",
+        "hirai-bot": "https://ca.slack-edge.com/T0AEQGDELSG-U0AL2BNC84Q-3fef70ee10ed-512",
+    }
     bots: list[BotConfig] = []
     for name in bot_names:
         resource_path = data_dir / name
@@ -395,6 +405,7 @@ async def main(args: argparse.Namespace) -> None:
             name=name,
             resource_dir=str(resource_path),
             icon_emoji=default_emojis.get(name, ":robot_face:"),
+            icon_url=default_icon_urls.get(name),
         ))
 
     logger.info("Bots: %s", [(b.name, b.resource_dir) for b in bots])
